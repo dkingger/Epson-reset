@@ -1,5 +1,6 @@
 // First real EEPROM-write diagnostic for the WebUSB prototype.
 // Safety scope: ET-2820 only, exactly ONE database-defined write, no retries.
+// v2 keeps one continuous BULK-IN reader active so delayed/split ACK frames are not missed.
 
 (() => {
   const btn = document.querySelector('#single-write');
@@ -29,49 +30,6 @@
     out.set(a, 0);
     out.set(b, a.length);
     return out;
-  }
-
-  async function sendAndReadOne(outEp, inEp, packet, label) {
-    const readPromise = readWithTimeout(inEp, 512, 1500);
-    await transferOutChecked(outEp, packet, label);
-    const result = await readPromise;
-
-    if (result.status !== 'ok') {
-      throw new Error(`${label}: USB IN status=${result.status}.`);
-    }
-
-    const data = dataBytes(result);
-    log(`${label} svar: ${data.length} bytes`);
-    if (data.length) log(bytesToHex(data));
-    return data;
-  }
-
-  async function readWriteAck(inEp, firstReadPromise) {
-    let combined = new Uint8Array();
-
-    for (let frame = 1; frame <= 4; frame++) {
-      const result = frame === 1
-        ? await firstReadPromise
-        : await readWithTimeout(inEp, 512, 900);
-
-      if (result.status !== 'ok') {
-        throw new Error(`EEPROM ACK frame ${frame}: USB IN status=${result.status}.`);
-      }
-
-      const data = dataBytes(result);
-      log(`EEPROM ACK frame ${frame}: ${data.length} bytes`);
-      if (data.length) log(bytesToHex(data));
-      combined = concatBytes(combined, data);
-
-      if (containsToken(combined, NG_TOKEN)) {
-        return { status: 'ng', data: combined };
-      }
-      if (containsToken(combined, OK_TOKEN)) {
-        return { status: 'ok', data: combined };
-      }
-    }
-
-    return { status: 'missing', data: combined };
   }
 
   btn.addEventListener('click', async () => {
@@ -121,6 +79,7 @@
     log('');
     log('Starter test med ÉN rigtig EEPROM-skrivning…');
     log('Sikkerhedslås: ET-2820, Platen Pad Counter, adresse 28 (0x001C) -> 0 (0x00), ingen retries.');
+    log('ACK-test v2: BULK IN læses kontinuerligt gennem hele sekvensen, så forsinkede eller opdelte USB-frames ikke overses.');
 
     const ejlInit = [
       0x00,0x00,0x00,0x1B,0x01,0x40,0x45,0x4A,0x4C,0x20,0x31,0x32,0x38,0x34,0x2E,0x34,0x0A,
@@ -132,41 +91,103 @@
     const d4CreditReq = [0x00,0x00,0x00,0x0D,0x01,0x00,0x04,0x02,0x02,0xFF,0xFF,0x00,0x01];
     const writePacket = generateWritePacket(Number(model.rkey), address, value, String(model.wkey));
 
+    let stopReader = false;
+    let rx = new Uint8Array();
+    let rxFrame = 0;
+    let readerError = null;
+    let readerPromise = null;
+
     try {
       const outEp = selectedCandidate.bulkOut.endpointNumber;
       const inEp = selectedCandidate.bulkIn.endpointNumber;
 
-      await transferOutChecked(outEp, ejlInit, 'EJL init');
-      await sleep(40);
-      await transferOutChecked(outEp, d4Init, 'D4 init');
-      await sleep(40);
+      // Keep exactly one transferIn pending at a time for the complete transaction.
+      // This is intentionally different from v1, which could consume a zero-length
+      // packet before the write ACK arrived and then miss delayed framing.
+      readerPromise = (async () => {
+        while (!stopReader && device?.opened) {
+          try {
+            const result = await device.transferIn(inEp, 512);
+            if (result.status !== 'ok') {
+              readerError = new Error(`Kontinuerlig USB IN: status=${result.status}.`);
+              break;
+            }
 
-      await sendAndReadOne(outEp, inEp, d4Open, 'Open-channel');
-      await sleep(40);
-      await sendAndReadOne(outEp, inEp, d4CreditGrant, 'Credit grant');
-      await sleep(40);
-      await sendAndReadOne(outEp, inEp, d4CreditReq, 'Credit request');
-      await sleep(40);
+            const data = dataBytes(result);
+            rxFrame++;
+            if (data.length) {
+              log(`USB IN frame ${rxFrame}: ${data.length} bytes`);
+              log(bytesToHex(data));
+              rx = concatBytes(rx, data);
+            } else {
+              // Epson/macOS can expose zero-length bulk packets. Avoid a busy loop.
+              await sleep(20);
+            }
+          } catch (err) {
+            if (!stopReader) readerError = err;
+            break;
+          }
+        }
+      })();
+
+      await transferOutChecked(outEp, ejlInit, 'EJL init');
+      await sleep(100);
+      await transferOutChecked(outEp, d4Init, 'D4 init');
+      await sleep(100);
+      await transferOutChecked(outEp, d4Open, 'Open-channel');
+      await sleep(100);
+      await transferOutChecked(outEp, d4CreditGrant, 'Credit grant');
+      await sleep(100);
+      await transferOutChecked(outEp, d4CreditReq, 'Credit request');
+      await sleep(100);
+
+      if (readerError) throw readerError;
 
       log(`EEPROM write-pakke: ${writePacket.length} bytes`);
       log(bytesToHex(writePacket));
 
-      const firstAckRead = readWithTimeout(inEp, 512, 1800);
+      // Only examine bytes received from this point forward for the write ACK.
+      const writeRxStart = rx.length;
       await transferOutChecked(outEp, writePacket, 'EEPROM WRITE adresse 28');
-      const ack = await readWriteAck(inEp, firstAckRead);
 
-      if (ack.status === 'ng') {
+      const deadline = Date.now() + 3500;
+      let ackStatus = 'missing';
+
+      while (Date.now() < deadline) {
+        if (readerError) throw readerError;
+
+        const afterWrite = rx.slice(writeRxStart);
+        if (containsToken(afterWrite, NG_TOKEN)) {
+          ackStatus = 'ng';
+          break;
+        }
+        if (containsToken(afterWrite, OK_TOKEN)) {
+          ackStatus = 'ok';
+          break;
+        }
+        await sleep(50);
+      }
+
+      const afterWrite = rx.slice(writeRxStart);
+      log(`Samlet USB IN efter EEPROM WRITE: ${afterWrite.length} bytes`);
+      if (afterWrite.length) log(bytesToHex(afterWrite));
+
+      if (ackStatus === 'ng') {
         log('EEPROM WRITE REJECTED: Printeren returnerede :42:NG;. Der sendes ikke mere.');
-      } else if (ack.status === 'ok') {
+      } else if (ackStatus === 'ok') {
         log('EEPROM WRITE VERIFIED: Printeren returnerede :42:OK;. Den ene skrivning er bekræftet.');
       } else {
-        log('EEPROM WRITE IKKE BEKRÆFTET: :42:OK; eller :42:NG; blev ikke fundet. Der sendes ikke mere.');
+        log('EEPROM WRITE IKKE BEKRÆFTET: :42:OK; eller :42:NG; blev ikke fundet inden for 3,5 sekunder. Der sendes ikke mere.');
       }
     } catch (err) {
       log(`FEJL i enkelt EEPROM-write test: ${err?.name || 'Error'}: ${err?.message || err}`);
       log('Der sendes ikke flere EEPROM-write-pakker.');
     } finally {
+      stopReader = true;
       await closeDevice();
+      if (readerPromise) {
+        try { await readerPromise; } catch (_) {}
+      }
       btn.disabled = false;
     }
   });
