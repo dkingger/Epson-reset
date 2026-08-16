@@ -7,7 +7,7 @@
   <style>
     body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:900px;margin:40px auto;padding:0 20px;line-height:1.5;background:#f7f7f8;color:#161616}
     main{background:white;border:1px solid #ddd;border-radius:14px;padding:24px}
-    button{font:inherit;padding:10px 16px;border-radius:9px;border:1px solid #bbb;background:#111;color:white;cursor:pointer;margin-right:6px}
+    button{font:inherit;padding:10px 16px;border-radius:9px;border:1px solid #bbb;background:#111;color:white;cursor:pointer;margin-right:6px;margin-bottom:6px}
     button:disabled{opacity:.5;cursor:not-allowed}
     pre{white-space:pre-wrap;word-break:break-word;background:#111;color:#eee;padding:16px;border-radius:10px;min-height:180px}
     .ok{color:#087a39}.warn{color:#a05a00}.muted{color:#666}
@@ -16,15 +16,16 @@
 <body>
 <main>
   <h1>Epson WebUSB Diagnostic</h1>
-  <p>Denne testside skriver <strong>ikke</strong> til printerens EEPROM. Den finder USB-interfacet, slår printermodellen op i den lokale database og kan teste den indledende EWR-kommunikation uden EEPROM-write-kommandoer.</p>
+  <p>Denne testside finder USB-interfacet, slår printermodellen op i den lokale database og kan teste kommunikationen. <strong>Forbered reset (dry run)</strong> bygger den samme reset-sekvens som EWR i browserens hukommelse, men sender den ikke til printeren.</p>
   <p class="muted">Brug Chrome/Chromium over HTTPS. Tilslut printeren direkte med USB og tænd den.</p>
   <p>
     <button id="connect">Find Epson-printer</button>
     <button id="test" disabled>Test kommunikation</button>
+    <button id="prepare" disabled>Forbered reset (dry run)</button>
     <button id="close" disabled>Luk forbindelse</button>
   </p>
   <pre id="log">Klar.</pre>
 </main>
-<script src="app.js?v=5"></script>
+<script src="app.js?v=6"></script>
 </body>
 </html>
