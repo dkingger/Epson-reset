@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Epson WebUSB Diagnostic</title>
+  <style>
+    body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:900px;margin:40px auto;padding:0 20px;line-height:1.5;background:#f7f7f8;color:#161616}
+    main{background:white;border:1px solid #ddd;border-radius:14px;padding:24px}
+    button{font:inherit;padding:10px 16px;border-radius:9px;border:1px solid #bbb;background:#111;color:white;cursor:pointer}
+    button:disabled{opacity:.5;cursor:not-allowed}
+    pre{white-space:pre-wrap;word-break:break-word;background:#111;color:#eee;padding:16px;border-radius:10px;min-height:180px}
+    .ok{color:#087a39}.warn{color:#a05a00}.muted{color:#666}
+  </style>
+</head>
+<body>
+<main>
+  <h1>Epson WebUSB Diagnostic</h1>
+  <p>Denne testside skriver <strong>ikke</strong> til printerens EEPROM. Den undersøger kun, om browseren kan se og åbne Epson-printerens USB-interface.</p>
+  <p class="muted">Brug Chrome/Chromium over HTTPS. Tilslut printeren direkte med USB og tænd den.</p>
+  <p><button id="connect">Find Epson-printer</button> <button id="close" disabled>Luk forbindelse</button></p>
+  <pre id="log">Klar.</pre>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
