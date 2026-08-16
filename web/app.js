@@ -1,11 +1,13 @@
 const EPSON_VID = 0x04B8;
 
 const connectBtn = document.querySelector('#connect');
+const testBtn = document.querySelector('#test');
 const closeBtn = document.querySelector('#close');
 const logEl = document.querySelector('#log');
 
 let device = null;
 let claimedInterface = null;
+let selectedCandidate = null;
 
 function log(message = '') {
   logEl.textContent += `\n${message}`;
@@ -16,17 +18,23 @@ function hex(n, width = 2) {
   return `0x${Number(n).toString(16).toUpperCase().padStart(width, '0')}`;
 }
 
+function bytesToHex(bytes) {
+  return Array.from(bytes, b => b.toString(16).toUpperCase().padStart(2, '0')).join(' ');
+}
+
 function describeEndpoint(endpoint) {
   return `${endpoint.direction.toUpperCase()} ${endpoint.type} endpoint #${endpoint.endpointNumber} (${hex(endpoint.endpointNumber)}) packetSize=${endpoint.packetSize}`;
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function getCandidates(configuration) {
   const candidates = [];
   const seenInterfaces = new Set();
-
-  // Prefer printer-class interfaces first to match EWR's native logic,
-  // then try vendor-specific interfaces as a safe diagnostic fallback.
   const all = [];
+
   for (const iface of configuration.interfaces) {
     for (const alt of iface.alternates) {
       const bulkIn = alt.endpoints.find(e => e.type === 'bulk' && e.direction === 'in');
@@ -56,8 +64,6 @@ function getCandidates(configuration) {
     a.alternateSetting - b.alternateSetting
   );
 
-  // claimInterface() claims an interface number, not an alternate setting.
-  // Keep one representative alternate for each interface during this probe.
   for (const candidate of all) {
     if (seenInterfaces.has(candidate.interfaceNumber)) continue;
     seenInterfaces.add(candidate.interfaceNumber);
@@ -77,9 +83,33 @@ async function closeDevice() {
   } finally {
     device = null;
     claimedInterface = null;
+    selectedCandidate = null;
     connectBtn.disabled = false;
+    testBtn.disabled = true;
     closeBtn.disabled = true;
     log('Forbindelsen er lukket.');
+  }
+}
+
+async function transferOutChecked(endpointNumber, bytes, label) {
+  const result = await device.transferOut(endpointNumber, Uint8Array.from(bytes));
+  if (result.status !== 'ok' || result.bytesWritten !== bytes.length) {
+    throw new Error(`${label}: USB OUT fejlede (status=${result.status}, skrevet=${result.bytesWritten}/${bytes.length}).`);
+  }
+  log(`${label}: sendt ${bytes.length} bytes.`);
+}
+
+async function readWithTimeout(endpointNumber, length = 512, timeoutMs = 1500) {
+  let timer = null;
+  const readPromise = device.transferIn(endpointNumber, length);
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Ingen USB IN-data inden for ${timeoutMs} ms.`)), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([readPromise, timeoutPromise]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -125,9 +155,7 @@ connectBtn.addEventListener('click', async () => {
     }
 
     log('');
-    log('Tester hvilke interfaces browseren kan claim’e. Der sendes stadig INGEN data til printeren.');
-
-    let selected = null;
+    log('Tester hvilke interfaces browseren kan claime. Der sendes stadig INGEN data til printeren.');
 
     for (const candidate of candidates) {
       log(`Prøver interface ${candidate.interfaceNumber}, class=${hex(candidate.interfaceClass)}, alt=${candidate.alternateSetting}, BULK OUT #${candidate.bulkOut.endpointNumber}, BULK IN #${candidate.bulkIn.endpointNumber}…`);
@@ -140,32 +168,93 @@ connectBtn.addEventListener('click', async () => {
           await device.selectAlternateInterface(candidate.interfaceNumber, candidate.alternateSetting);
         }
 
-        selected = candidate;
-        log(`SUCCESS: Interface ${candidate.interfaceNumber} kan claimed af browseren.`);
+        selectedCandidate = candidate;
+        log(`SUCCESS: Interface ${candidate.interfaceNumber} blev claimed af browseren.`);
         break;
       } catch (err) {
         log(`  Kunne ikke claime interface ${candidate.interfaceNumber}: ${err?.name || 'Error'}: ${err?.message || err}`);
-        try {
-          await device.releaseInterface(candidate.interfaceNumber);
-        } catch (_) {}
+        try { await device.releaseInterface(candidate.interfaceNumber); } catch (_) {}
         claimedInterface = null;
       }
     }
 
-    if (!selected) {
-      throw new Error('Ingen af Epson-printerens relevante BULK-interfaces kunne claimes. macOS eller en anden driver/applikation ejer dem sandsynligvis.');
+    if (!selectedCandidate) {
+      throw new Error('Ingen af Epson-printerens relevante BULK-interfaces kunne claimes.');
     }
 
     log('');
-    log(`Valgt claimbart interface til videre diagnose: ${selected.interfaceNumber}`);
-    log(`Class=${hex(selected.interfaceClass)}, alt=${selected.alternateSetting}, BULK OUT #${selected.bulkOut.endpointNumber}, BULK IN #${selected.bulkIn.endpointNumber}`);
-    log('Diagnosen er færdig. Der er IKKE sendt nogen Epson-reset- eller EEPROM-kommandoer.');
+    log(`Valgt interface: ${selectedCandidate.interfaceNumber}`);
+    log(`Class=${hex(selectedCandidate.interfaceClass)}, alt=${selectedCandidate.alternateSetting}, BULK OUT #${selectedCandidate.bulkOut.endpointNumber}, BULK IN #${selectedCandidate.bulkIn.endpointNumber}`);
+    log('Der er stadig IKKE sendt nogen Epson-reset- eller EEPROM-kommandoer.');
 
     connectBtn.disabled = true;
+    testBtn.disabled = false;
     closeBtn.disabled = false;
   } catch (err) {
     log('');
     log(`FEJL: ${err?.name || 'Error'}: ${err?.message || err}`);
+    await closeDevice();
+  }
+});
+
+testBtn.addEventListener('click', async () => {
+  if (!device || claimedInterface === null || !selectedCandidate) {
+    log('FEJL: Forbind printeren først.');
+    return;
+  }
+
+  testBtn.disabled = true;
+  log('');
+  log('Starter ikke-destruktiv kommunikationstest…');
+  log('Der sendes kun EWR-init + D4-init + kanalåbning. Ingen EEPROM-write-pakke indgår.');
+
+  const ejlInit = [
+    0x00,0x00,0x00,0x1B,0x01,0x40,0x45,0x4A,0x4C,0x20,0x31,0x32,0x38,0x34,0x2E,0x34,0x0A,
+    0x40,0x45,0x4A,0x4C,0x0A,0x40,0x45,0x4A,0x4C,0x0A
+  ];
+  const d4Init = [0x00,0x00,0x00,0x08,0x01,0x00,0x00,0x10];
+  const d4Open = [0x00,0x00,0x00,0x11,0x01,0x00,0x01,0x02,0x02,0x01,0x00,0x01,0x00,0x00,0x00,0x00,0x00];
+
+  try {
+    const outEp = selectedCandidate.bulkOut.endpointNumber;
+    const inEp = selectedCandidate.bulkIn.endpointNumber;
+
+    await transferOutChecked(outEp, ejlInit, 'EJL init');
+    await sleep(40);
+    await transferOutChecked(outEp, d4Init, 'D4 init');
+    await sleep(40);
+
+    const readPromise = readWithTimeout(inEp, 512, 1500);
+    await transferOutChecked(outEp, d4Open, 'D4 open-channel');
+
+    const result = await readPromise;
+    if (result.status !== 'ok') {
+      throw new Error(`USB IN svarede med status=${result.status}.`);
+    }
+
+    const data = result.data
+      ? new Uint8Array(result.data.buffer, result.data.byteOffset, result.data.byteLength)
+      : new Uint8Array();
+
+    if (!data.length) {
+      throw new Error('Printeren returnerede et tomt USB-svar.');
+    }
+
+    log(`USB IN: modtog ${data.length} bytes.`);
+    log(bytesToHex(data));
+
+    const openAck = data.length >= 7 && data[6] === 0x81;
+    if (openAck) {
+      log('SUCCESS: Modtog Epson D4 open-channel ACK (0x81). Tovejskommunikation virker.');
+    } else {
+      log('SUCCESS: Printeren svarede over BULK IN. Open-channel ACK 0x81 var ikke i dette første svar, men USB OUT/IN virker.');
+    }
+
+    log('Kommunikationstesten er færdig. Ingen EEPROM-værdier er skrevet.');
+    testBtn.disabled = false;
+  } catch (err) {
+    log(`FEJL i kommunikationstest: ${err?.name || 'Error'}: ${err?.message || err}`);
+    log('Forbindelsen lukkes for at afbryde eventuelle ventende USB-transfers.');
     await closeDevice();
   }
 });
@@ -177,7 +266,9 @@ navigator.usb?.addEventListener('disconnect', event => {
     log('Printeren blev frakoblet USB.');
     device = null;
     claimedInterface = null;
+    selectedCandidate = null;
     connectBtn.disabled = false;
+    testBtn.disabled = true;
     closeBtn.disabled = true;
   }
 });
