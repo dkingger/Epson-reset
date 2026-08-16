@@ -17,8 +17,8 @@
 <main>
   <h1>Epson WebUSB Diagnostic</h1>
   <p>Denne testside finder USB-interfacet, slår printermodellen op i den lokale database og kan teste kommunikationen. <strong>Forbered reset (dry run)</strong> bygger den samme reset-sekvens som EWR i browserens hukommelse, men sender den ikke til printeren.</p>
-  <p><strong>Test 1 EEPROM-skrivning</strong> er anderledes: den er sikkerhedslåst til ET-2820 og udfører efter en ekstra bekræftelse præcis én reel EEPROM-skrivning til adresse 28 med værdien 0. Der bruges ingen retries.</p>
-  <p class="muted">Brug Chrome/Chromium over HTTPS. Tilslut printeren direkte med USB og tænd den.</p>
+  <p><strong>Test 1 EEPROM-skrivning</strong> udfører én reel databasespecificeret skrivning. <strong>Udfør fuld reset</strong> skriver alle resetværdier og kræver <code>:42:OK;</code> fra printeren for hver enkelt skrivning; ved afvisning eller manglende ACK stoppes processen.</p>
+  <p class="muted">Brug Chrome/Chromium over HTTPS. Tilslut printeren direkte med USB og tænd den. En waste ink reset må kun udføres efter fysisk service af den relevante blækopsamling/pad.</p>
   <p>
     <button id="connect">Find Epson-printer</button>
     <button id="test" disabled>Test kommunikation</button>
@@ -31,5 +31,6 @@
 <script src="app.js?v=6"></script>
 <script src="credit-test.js?v=2"></script>
 <script src="single-write-test.js?v=2"></script>
+<script src="full-reset.js?v=1"></script>
 </body>
 </html>
