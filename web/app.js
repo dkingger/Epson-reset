@@ -2,6 +2,7 @@ const EPSON_VID = 0x04B8;
 
 const connectBtn = document.querySelector('#connect');
 const testBtn = document.querySelector('#test');
+const prepareBtn = document.querySelector('#prepare');
 const closeBtn = document.querySelector('#close');
 const logEl = document.querySelector('#log');
 
@@ -47,7 +48,7 @@ async function loadLocalModel(productName) {
   const models = (json.models && typeof json.models === 'object') ? json.models : json;
   const wanted = normalizeModelName(productName);
 
-  let key = Object.keys(models).find(k => k.toLowerCase() === wanted.toLowerCase());
+  const key = Object.keys(models).find(k => k.toLowerCase() === wanted.toLowerCase());
   if (!key) {
     throw new Error(`Printermodellen '${wanted}' blev ikke fundet i den lokale database.`);
   }
@@ -66,6 +67,87 @@ async function loadLocalModel(productName) {
   log('Databasen er kun læst. Ingen EEPROM-værdier er skrevet.');
 
   return { name: key, data: model };
+}
+
+function generateWritePacket(rkey, address, value, wkey) {
+  const CMD_EEPROM_WRITE = 0x42;
+  const PREFIX_PIPE = 0x7C;
+  const SOCKET_EPSON_CTRL = 0x02;
+  const CREDIT = 0x00;
+
+  const c = CMD_EEPROM_WRITE;
+  const notC = (~c) & 0xFF;
+  const shiftC = ((c >> 1) & 0x7F) | ((c << 7) & 0x80);
+
+  const inner = [
+    rkey & 0xFF,
+    (rkey >> 8) & 0xFF,
+    c,
+    notC,
+    shiftC,
+    address & 0xFF,
+    (address >> 8) & 0xFF,
+    value & 0xFF,
+    ...Array.from(String(wkey), ch => ch.charCodeAt(0) & 0xFF),
+  ];
+
+  const innerLen = inner.length;
+  const epsonCmd = [
+    PREFIX_PIPE,
+    PREFIX_PIPE,
+    innerLen & 0xFF,
+    (innerLen >> 8) & 0xFF,
+    ...inner,
+  ];
+
+  const d4Len = epsonCmd.length + 6;
+  return [
+    SOCKET_EPSON_CTRL,
+    SOCKET_EPSON_CTRL,
+    (d4Len >> 8) & 0xFF,
+    d4Len & 0xFF,
+    CREDIT,
+    0x00,
+    ...epsonCmd,
+  ];
+}
+
+function generateResetSequence(model) {
+  const ejlInit = [
+    0x00,0x00,0x00,0x1B,0x01,0x40,0x45,0x4A,0x4C,0x20,0x31,0x32,0x38,0x34,0x2E,0x34,0x0A,
+    0x40,0x45,0x4A,0x4C,0x0A,0x40,0x45,0x4A,0x4C,0x0A
+  ];
+  const d4Init = [0x00,0x00,0x00,0x08,0x01,0x00,0x00,0x10];
+  const d4Open = [0x00,0x00,0x00,0x11,0x01,0x00,0x01,0x02,0x02,0x01,0x00,0x01,0x00,0x00,0x00,0x00,0x00];
+  const d4CreditGrant = [0x00,0x00,0x00,0x0B,0x01,0x00,0x03,0x02,0x02,0x00,0x01];
+  const d4CreditReq = [0x00,0x00,0x00,0x0D,0x01,0x00,0x04,0x02,0x02,0xFF,0xFF,0x00,0x01];
+
+  const sequence = [ejlInit, d4Init, d4Open];
+  const writes = [];
+  const groups = Array.isArray(model.pad_groups) ? model.pad_groups : [];
+
+  for (const group of groups) {
+    const addresses = Array.isArray(group.addresses) ? group.addresses : [];
+    const resetValues = Array.isArray(group.reset) ? group.reset : [];
+    if (addresses.length !== resetValues.length) {
+      throw new Error(`${group.desc || group.kind || 'Pad group'}: addresses/reset har forskellig længde.`);
+    }
+
+    for (let i = 0; i < addresses.length; i++) {
+      const address = Number(addresses[i]);
+      const value = Number(resetValues[i]);
+      const packet = generateWritePacket(Number(model.rkey), address, value, String(model.wkey));
+      sequence.push(d4CreditGrant, d4CreditReq, packet);
+      writes.push({
+        group: group.desc || group.kind || 'Pad group',
+        address,
+        value,
+        packet,
+      });
+    }
+  }
+
+  return { sequence, writes };
 }
 
 function getCandidates(configuration) {
@@ -125,6 +207,7 @@ async function closeDevice() {
     selectedModel = null;
     connectBtn.disabled = false;
     testBtn.disabled = true;
+    prepareBtn.disabled = true;
     closeBtn.disabled = true;
     log('Forbindelsen er lukket.');
   }
@@ -230,6 +313,7 @@ connectBtn.addEventListener('click', async () => {
 
     connectBtn.disabled = true;
     testBtn.disabled = false;
+    prepareBtn.disabled = false;
     closeBtn.disabled = false;
   } catch (err) {
     log('');
@@ -300,6 +384,42 @@ testBtn.addEventListener('click', async () => {
   }
 });
 
+prepareBtn.addEventListener('click', () => {
+  if (!selectedModel) {
+    log('FEJL: Find printeren først.');
+    return;
+  }
+
+  try {
+    const { sequence, writes } = generateResetSequence(selectedModel.data);
+    log('');
+    log('Forbereder reset-sekvens som DRY RUN…');
+    log('VIGTIGT: Pakkerne genereres kun i browserens hukommelse. Der kaldes IKKE transferOut(), så intet sendes til printeren.');
+    log(`Model: ${selectedModel.name}`);
+    log(`Genereret ${sequence.length} pakker i alt: 3 init-pakker + ${writes.length} × (credit grant + credit request + EEPROM write).`);
+    log(`EEPROM-write-pakker: ${writes.length}`);
+
+    let currentGroup = '';
+    for (const write of writes) {
+      if (write.group !== currentGroup) {
+        currentGroup = write.group;
+        log(`- ${currentGroup}`);
+      }
+      log(`    adresse ${write.address} (${hex(write.address, 4)}) -> ${write.value} (${hex(write.value)})`);
+    }
+
+    if (writes.length) {
+      log('');
+      log(`Første EEPROM-write-pakke (${writes[0].packet.length} bytes):`);
+      log(bytesToHex(writes[0].packet));
+    }
+
+    log('DRY RUN SUCCESS: Reset-sekvensen kan genereres fra den lokale database. Intet er skrevet til printeren.');
+  } catch (err) {
+    log(`FEJL i dry run: ${err?.name || 'Error'}: ${err?.message || err}`);
+  }
+});
+
 closeBtn.addEventListener('click', closeDevice);
 
 navigator.usb?.addEventListener('disconnect', event => {
@@ -311,6 +431,7 @@ navigator.usb?.addEventListener('disconnect', event => {
     selectedModel = null;
     connectBtn.disabled = false;
     testBtn.disabled = true;
+    prepareBtn.disabled = true;
     closeBtn.disabled = true;
   }
 });
