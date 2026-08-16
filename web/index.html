@@ -17,16 +17,19 @@
 <main>
   <h1>Epson WebUSB Diagnostic</h1>
   <p>Denne testside finder USB-interfacet, slår printermodellen op i den lokale database og kan teste kommunikationen. <strong>Forbered reset (dry run)</strong> bygger den samme reset-sekvens som EWR i browserens hukommelse, men sender den ikke til printeren.</p>
+  <p><strong>Test 1 EEPROM-skrivning</strong> er anderledes: den er sikkerhedslåst til ET-2820 og udfører efter en ekstra bekræftelse præcis én reel EEPROM-skrivning til adresse 28 med værdien 0. Der bruges ingen retries.</p>
   <p class="muted">Brug Chrome/Chromium over HTTPS. Tilslut printeren direkte med USB og tænd den.</p>
   <p>
     <button id="connect">Find Epson-printer</button>
     <button id="test" disabled>Test kommunikation</button>
     <button id="prepare" disabled>Forbered reset (dry run)</button>
+    <button id="single-write">Test 1 EEPROM-skrivning</button>
     <button id="close" disabled>Luk forbindelse</button>
   </p>
   <pre id="log">Klar.</pre>
 </main>
 <script src="app.js?v=6"></script>
 <script src="credit-test.js?v=2"></script>
+<script src="single-write-test.js?v=1"></script>
 </body>
 </html>
