@@ -3,34 +3,50 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Epson WebUSB Diagnostic</title>
+  <meta name="theme-color" content="#111827">
+  <title>Epson Waste Ink Reset</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <style>
-    body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:900px;margin:40px auto;padding:0 20px;line-height:1.5;background:#f7f7f8;color:#161616}
-    main{background:white;border:1px solid #ddd;border-radius:14px;padding:24px}
-    button{font:inherit;padding:10px 16px;border-radius:9px;border:1px solid #bbb;background:#111;color:white;cursor:pointer;margin-right:6px;margin-bottom:6px}
-    button:disabled{opacity:.5;cursor:not-allowed}
-    pre{white-space:pre-wrap;word-break:break-word;background:#111;color:#eee;padding:16px;border-radius:10px;min-height:180px}
-    .ok{color:#087a39}.warn{color:#a05a00}.muted{color:#666}
+    *{box-sizing:border-box}
+    body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:900px;margin:40px auto;padding:0 20px;line-height:1.5;background:#f5f6f8;color:#161616}
+    main{background:#fff;border:1px solid #ddd;border-radius:16px;padding:26px;box-shadow:0 8px 28px rgba(0,0,0,.06)}
+    .title{display:flex;align-items:center;gap:14px;margin-bottom:8px}
+    .title img{width:48px;height:48px;flex:none}
+    h1{font-size:28px;line-height:1.2;margin:0}
+    p{margin:10px 0}
+    .muted{color:#666}
+    .warning{background:#fff8e6;border:1px solid #ead7a2;border-radius:10px;padding:11px 13px;margin:18px 0}
+    .buttons{display:flex;flex-wrap:wrap;gap:8px;margin:20px 0 14px}
+    button{font:inherit;font-weight:600;padding:10px 16px;border-radius:9px;border:1px solid #bbb;background:#111827;color:#fff;cursor:pointer}
+    button:hover:not(:disabled){filter:brightness(1.12)}
+    button:disabled{opacity:.45;cursor:not-allowed}
+    #reset{background:#9f2727;border-color:#842020}
+    #close{background:#fff;color:#222}
+    pre{white-space:pre-wrap;word-break:break-word;background:#101216;color:#e9edf2;padding:16px;border-radius:10px;min-height:220px;max-height:520px;overflow:auto;margin:0;font-size:13px;line-height:1.55}
   </style>
 </head>
 <body>
 <main>
-  <h1>Epson WebUSB Diagnostic</h1>
-  <p>Denne testside finder USB-interfacet, slår printermodellen op i den lokale database og kan teste kommunikationen. <strong>Forbered reset (dry run)</strong> bygger den samme reset-sekvens som EWR i browserens hukommelse, men sender den ikke til printeren.</p>
-  <p><strong>Test 1 EEPROM-skrivning</strong> udfører én reel databasespecificeret skrivning. <strong>Udfør fuld reset</strong> skriver alle resetværdier og kræver <code>:42:OK;</code> fra printeren for hver enkelt skrivning; ved afvisning eller manglende ACK stoppes processen.</p>
-  <p class="muted">Brug Chrome/Chromium over HTTPS. Tilslut printeren direkte med USB og tænd den. En waste ink reset må kun udføres efter fysisk service af den relevante blækopsamling/pad.</p>
-  <p>
+  <div class="title">
+    <img src="favicon.svg" alt="">
+    <h1>Epson Waste Ink Reset</h1>
+  </div>
+
+  <p>Forbind en understøttet Epson-printer direkte med USB. Siden finder printermodellen i den lokale database og kan nulstille dens waste ink counter via WebUSB.</p>
+  <p class="muted">Kræver Chrome eller Chromium og HTTPS.</p>
+
+  <div class="warning"><strong>Vigtigt:</strong> Udfør kun reset efter fysisk service eller tømning af printerens waste ink pad/opsamling.</div>
+
+  <div class="buttons">
     <button id="connect">Find Epson-printer</button>
-    <button id="test" disabled>Test kommunikation</button>
-    <button id="prepare" disabled>Forbered reset (dry run)</button>
-    <button id="single-write">Test 1 EEPROM-skrivning</button>
+    <button id="reset" disabled>Udfør fuld reset</button>
     <button id="close" disabled>Luk forbindelse</button>
-  </p>
-  <pre id="log">Klar.</pre>
+  </div>
+
+  <pre id="log">Klar. Tilslut printeren med USB og klik “Find Epson-printer”.</pre>
 </main>
-<script src="app.js?v=6"></script>
-<script src="credit-test.js?v=2"></script>
-<script src="single-write-test.js?v=2"></script>
-<script src="full-reset.js?v=1"></script>
+
+<script src="app.js?v=7"></script>
+<script src="full-reset.js?v=2"></script>
 </body>
 </html>
