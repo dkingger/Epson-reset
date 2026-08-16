@@ -8,6 +8,7 @@ const logEl = document.querySelector('#log');
 let device = null;
 let claimedInterface = null;
 let selectedCandidate = null;
+let selectedModel = null;
 
 function log(message = '') {
   logEl.textContent += `\n${message}`;
@@ -28,6 +29,43 @@ function describeEndpoint(endpoint) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function normalizeModelName(name) {
+  return String(name || '')
+    .replace(/\s+Series\s*$/i, '')
+    .trim();
+}
+
+async function loadLocalModel(productName) {
+  const response = await fetch('database.json', { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Kunne ikke hente lokal database.json (HTTP ${response.status}).`);
+  }
+
+  const json = await response.json();
+  const models = (json.models && typeof json.models === 'object') ? json.models : json;
+  const wanted = normalizeModelName(productName);
+
+  let key = Object.keys(models).find(k => k.toLowerCase() === wanted.toLowerCase());
+  if (!key) {
+    throw new Error(`Printermodellen '${wanted}' blev ikke fundet i den lokale database.`);
+  }
+
+  const model = models[key];
+  const groups = Array.isArray(model.pad_groups) ? model.pad_groups : [];
+  const writes = groups.reduce((sum, group) => sum + (Array.isArray(group.addresses) ? group.addresses.length : 0), 0);
+
+  log('');
+  log(`Lokal database: MATCH '${key}'.`);
+  log(`rkey=${model.rkey}, wkey=${model.wkey}, pad_groups=${groups.length}, EEPROM writes=${writes}`);
+  for (const group of groups) {
+    const count = Array.isArray(group.addresses) ? group.addresses.length : 0;
+    log(`- ${group.desc || group.kind || 'Pad group'}: ${count} skriveadresser`);
+  }
+  log('Databasen er kun læst. Ingen EEPROM-værdier er skrevet.');
+
+  return { name: key, data: model };
 }
 
 function getCandidates(configuration) {
@@ -84,6 +122,7 @@ async function closeDevice() {
     device = null;
     claimedInterface = null;
     selectedCandidate = null;
+    selectedModel = null;
     connectBtn.disabled = false;
     testBtn.disabled = true;
     closeBtn.disabled = true;
@@ -128,6 +167,8 @@ connectBtn.addEventListener('click', async () => {
     log(`Producent: ${device.manufacturerName || '(ukendt)'}`);
     log(`VID:PID = ${hex(device.vendorId, 4)}:${hex(device.productId, 4)}`);
     if (device.serialNumber) log(`Serienummer: ${device.serialNumber}`);
+
+    selectedModel = await loadLocalModel(device.productName);
 
     await device.open();
     log('USB-enheden blev åbnet.');
@@ -198,7 +239,7 @@ connectBtn.addEventListener('click', async () => {
 });
 
 testBtn.addEventListener('click', async () => {
-  if (!device || claimedInterface === null || !selectedCandidate) {
+  if (!device || claimedInterface === null || !selectedCandidate || !selectedModel) {
     log('FEJL: Forbind printeren først.');
     return;
   }
@@ -243,11 +284,11 @@ testBtn.addEventListener('click', async () => {
     log(`USB IN: modtog ${data.length} bytes.`);
     log(bytesToHex(data));
 
-    const openAck = data.length >= 7 && data[6] === 0x81;
+    const openAck = data.length >= 1 && (data[0] === 0x81 || (data.length >= 7 && data[6] === 0x81));
     if (openAck) {
       log('SUCCESS: Modtog Epson D4 open-channel ACK (0x81). Tovejskommunikation virker.');
     } else {
-      log('SUCCESS: Printeren svarede over BULK IN. Open-channel ACK 0x81 var ikke i dette første svar, men USB OUT/IN virker.');
+      log('SUCCESS: Printeren svarede over BULK IN. USB OUT/IN virker.');
     }
 
     log('Kommunikationstesten er færdig. Ingen EEPROM-værdier er skrevet.');
@@ -267,6 +308,7 @@ navigator.usb?.addEventListener('disconnect', event => {
     device = null;
     claimedInterface = null;
     selectedCandidate = null;
+    selectedModel = null;
     connectBtn.disabled = false;
     testBtn.disabled = true;
     closeBtn.disabled = true;
