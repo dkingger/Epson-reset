@@ -20,9 +20,13 @@ function describeEndpoint(endpoint) {
   return `${endpoint.direction.toUpperCase()} ${endpoint.type} endpoint #${endpoint.endpointNumber} (${hex(endpoint.endpointNumber)}) packetSize=${endpoint.packetSize}`;
 }
 
-function findBestInterface(configuration) {
+function getCandidates(configuration) {
   const candidates = [];
+  const seenInterfaces = new Set();
 
+  // Prefer printer-class interfaces first to match EWR's native logic,
+  // then try vendor-specific interfaces as a safe diagnostic fallback.
+  const all = [];
   for (const iface of configuration.interfaces) {
     for (const alt of iface.alternates) {
       const bulkIn = alt.endpoints.find(e => e.type === 'bulk' && e.direction === 'in');
@@ -33,7 +37,7 @@ function findBestInterface(configuration) {
       const isVendorSpecific = alt.interfaceClass === 0xFF;
       if (!isPrinterClass && !isVendorSpecific) continue;
 
-      candidates.push({
+      all.push({
         interfaceNumber: iface.interfaceNumber,
         alternateSetting: alt.alternateSetting,
         interfaceClass: alt.interfaceClass,
@@ -46,8 +50,21 @@ function findBestInterface(configuration) {
     }
   }
 
-  candidates.sort((a, b) => a.priority - b.priority || a.interfaceNumber - b.interfaceNumber);
-  return candidates[0] ?? null;
+  all.sort((a, b) =>
+    a.priority - b.priority ||
+    a.interfaceNumber - b.interfaceNumber ||
+    a.alternateSetting - b.alternateSetting
+  );
+
+  // claimInterface() claims an interface number, not an alternate setting.
+  // Keep one representative alternate for each interface during this probe.
+  for (const candidate of all) {
+    if (seenInterfaces.has(candidate.interfaceNumber)) continue;
+    seenInterfaces.add(candidate.interfaceNumber);
+    candidates.push(candidate);
+  }
+
+  return candidates;
 }
 
 async function closeDevice() {
@@ -102,23 +119,46 @@ connectBtn.addEventListener('click', async () => {
       }
     }
 
-    const selected = findBestInterface(device.configuration);
-    if (!selected) {
+    const candidates = getCandidates(device.configuration);
+    if (!candidates.length) {
       throw new Error('Fandt ikke et printer- eller vendor-specific interface med både BULK IN og BULK OUT.');
     }
 
     log('');
-    log(`Bedste kandidat: interface ${selected.interfaceNumber}, class=${hex(selected.interfaceClass)}, BULK OUT #${selected.bulkOut.endpointNumber}, BULK IN #${selected.bulkIn.endpointNumber}`);
+    log('Tester hvilke interfaces browseren kan claim’e. Der sendes stadig INGEN data til printeren.');
 
-    if (selected.alternateSetting !== 0) {
-      await device.selectAlternateInterface(selected.interfaceNumber, selected.alternateSetting);
-      log(`Valgte alternate setting ${selected.alternateSetting}.`);
+    let selected = null;
+
+    for (const candidate of candidates) {
+      log(`Prøver interface ${candidate.interfaceNumber}, class=${hex(candidate.interfaceClass)}, alt=${candidate.alternateSetting}, BULK OUT #${candidate.bulkOut.endpointNumber}, BULK IN #${candidate.bulkIn.endpointNumber}…`);
+
+      try {
+        await device.claimInterface(candidate.interfaceNumber);
+        claimedInterface = candidate.interfaceNumber;
+
+        if (candidate.alternateSetting !== 0) {
+          await device.selectAlternateInterface(candidate.interfaceNumber, candidate.alternateSetting);
+        }
+
+        selected = candidate;
+        log(`SUCCESS: Interface ${candidate.interfaceNumber} kan claimed af browseren.`);
+        break;
+      } catch (err) {
+        log(`  Kunne ikke claime interface ${candidate.interfaceNumber}: ${err?.name || 'Error'}: ${err?.message || err}`);
+        try {
+          await device.releaseInterface(candidate.interfaceNumber);
+        } catch (_) {}
+        claimedInterface = null;
+      }
     }
 
-    await device.claimInterface(selected.interfaceNumber);
-    claimedInterface = selected.interfaceNumber;
-    log(`SUCCESS: Interface ${selected.interfaceNumber} blev claimed af browseren.`);
+    if (!selected) {
+      throw new Error('Ingen af Epson-printerens relevante BULK-interfaces kunne claimes. macOS eller en anden driver/applikation ejer dem sandsynligvis.');
+    }
+
     log('');
+    log(`Valgt claimbart interface til videre diagnose: ${selected.interfaceNumber}`);
+    log(`Class=${hex(selected.interfaceClass)}, alt=${selected.alternateSetting}, BULK OUT #${selected.bulkOut.endpointNumber}, BULK IN #${selected.bulkIn.endpointNumber}`);
     log('Diagnosen er færdig. Der er IKKE sendt nogen Epson-reset- eller EEPROM-kommandoer.');
 
     connectBtn.disabled = true;
@@ -126,7 +166,6 @@ connectBtn.addEventListener('click', async () => {
   } catch (err) {
     log('');
     log(`FEJL: ${err?.name || 'Error'}: ${err?.message || err}`);
-    log('Hvis fejlen opstår ved claimInterface(), er interfacet sandsynligvis optaget af macOS/driveren.');
     await closeDevice();
   }
 });
