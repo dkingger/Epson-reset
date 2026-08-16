@@ -16,7 +16,7 @@
 <body>
 <main>
   <h1>Epson WebUSB Diagnostic</h1>
-  <p>Denne testside skriver <strong>ikke</strong> til printerens EEPROM. Første trin finder USB-interfacet. Kommunikationstesten sender kun EWR's tre initialiserings-/kanalåbningspakker og indeholder ingen EEPROM-write-kommando.</p>
+  <p>Denne testside skriver <strong>ikke</strong> til printerens EEPROM. Den finder USB-interfacet, slår printermodellen op i den lokale database og kan teste den indledende EWR-kommunikation uden EEPROM-write-kommandoer.</p>
   <p class="muted">Brug Chrome/Chromium over HTTPS. Tilslut printeren direkte med USB og tænd den.</p>
   <p>
     <button id="connect">Find Epson-printer</button>
@@ -25,6 +25,6 @@
   </p>
   <pre id="log">Klar.</pre>
 </main>
-<script src="app.js?v=4"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>
